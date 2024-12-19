@@ -52,40 +52,15 @@ float getTemperature(int index) {
 void TaskReadTemperature(void* parameter) {
     for(;;) {
         if(xSemaphoreTake(oneWireMutex, pdMS_TO_TICKS(1000)) == pdTRUE) {
-            // Container for web interface data
-            std::vector<std::pair<String, float>> webSensorData;
             sensors.requestTemperatures();
+            temperatures.clear();
             
-            // Get MQTT manager instance
-            MQTTManager& mqttManager = MQTTManager::getInstance();
-            
-            // Process each sensor
+            // Update global temperature vector
             for(size_t i = 0; i < sensorAddresses.size(); i++) {
-                float temperature = sensors.getTempC((uint8_t*)sensorAddresses[i].data());
-                String sensorAddr = sensorAddressToString(sensorAddresses[i]);
-                
-                if(temperature != DEVICE_DISCONNECTED_C) {
-                    // Store for web interface
-                    webSensorData.push_back(std::make_pair(sensorAddr, temperature));
-                    
-                    // MQTT Publishing
-                    String topic = String(SYSTEM_NAME) + "/" + 
-                                 String(MQTT_CLIENT_ID) + "/" + 
-                                 String(MQTT_TOPIC_BASE) + "/" +
-                                 sensorAddr;
-                    String payload = String(temperature, 2);
-                    mqttManager.publishTopic(topic.c_str(), payload.c_str());
-                    
-                    // Update graph for highlighted sensor
-                    if(sensorAddr == WEBPAGE_HIGHLITED_SENSOR) {
-                        webServer.sendTemperature(temperature);
-                    }
+                float temp = sensors.getTempC((uint8_t*)sensorAddresses[i].data());
+                if(temp != DEVICE_DISCONNECTED_C) {
+                    temperatures.push_back(temp);
                 }
-            }
-            
-            // Update web interface sensor list
-            if(!webSensorData.empty()) {
-                webServer.sendSensorData(webSensorData);
             }
             
             xSemaphoreGive(oneWireMutex);

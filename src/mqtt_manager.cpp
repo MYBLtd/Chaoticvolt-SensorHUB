@@ -42,26 +42,16 @@ void MQTTManager::setupSecureClient() {
 }
 
 void MQTTManager::loop() {
-    mqttClient.loop();
-    publishState();
-    
-    // Add exponential backoff for mutex attempts
-    static const uint32_t MAX_MUTEX_WAIT = 500; // 500ms max wait
-    static uint32_t mutexWait = 10; // Start with 10ms
-    
     if (oneWireMutex != NULL) {
-        if (xSemaphoreTake(oneWireMutex, pdMS_TO_TICKS(mutexWait)) == pdTRUE) {
-            if (!temperatures.empty() && !sensorAddresses.empty() && 
-                temperatures.size() == sensorAddresses.size()) {
+        if(xSemaphoreTake(oneWireMutex, pdMS_TO_TICKS(1000)) == pdTRUE) {
+            // Access global data structures directly
+            if (!temperatures.empty() && !sensorAddresses.empty()) {
                 publishSensorData(sensorAddresses, temperatures);
             }
             xSemaphoreGive(oneWireMutex);
-            mutexWait = 10; // Reset wait time on success
-        } else {
-            // Increase wait time exponentially
-            mutexWait = min(mutexWait * 2, MAX_MUTEX_WAIT);
         }
     }
+    mqttClient.loop();
 }
 
 bool MQTTManager::isConnected() {
