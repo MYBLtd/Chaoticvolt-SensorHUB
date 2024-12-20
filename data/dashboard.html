@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Temperature Monitoring System</title>
+    <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+    <div class="page-container">
+        <!-- Row 1 -->
+        <div class="header-panel">
+            <h1>Temperature Monitoring System</h1>
+        </div>
+
+        <!-- Row 2 -->
+        <div class="main-content">
+            <div class="control-panel">
+                <div class="temperature-display">
+                    <h2>Current Temperature</h2>
+                    <div id="tempDisplay">--.-°C</div>
+                </div>
+                <div class="relay-controls">
+                    <h2>Relay Controls</h2>
+                    <div id="relay1-controls" class="control-group">
+                        <h3>Relay 1 <span id="relay1-state" class="relay-state">Unknown</span></h3>
+                        <button class="relay-button" onclick="setRelay(1, true)">ON</button>
+                        <button class="relay-button" onclick="setRelay(1, false)">OFF</button>
+                    </div>
+                    <div id="relay2-controls" class="control-group">
+                        <h3>Relay 2 <span id="relay2-state" class="relay-state">Unknown</span></h3>
+                        <button class="relay-button" onclick="setRelay(2, true)">ON</button>
+                        <button class="relay-button" onclick="setRelay(2, false)">OFF</button>
+                    </div>
+                </div>
+                <div class="sensor-select">
+                    <h3>Select Sensor</h3>
+                    <select id="sensorPicker" onchange="onSensorSelected(this.value)"></select>
+                </div>
+            </div>
+            <div class="graph-panel">
+                <h2>Temperature History</h2>
+                <svg id="tempGraph" viewBox="0 0 1000 300" preserveAspectRatio="none">
+                    <g class="grid"></g>
+                    <path class="temp-line"></path>
+                    <g class="labels"></g>
+                </svg>
+            </div>
+        </div>
+
+        <!-- Row 3 -->
+        <div class="bottom-row">
+            <div class="sensor-panel">
+                <h2>All Sensors</h2>
+                <div id="sensorList"></div>
+            </div>
+            <div class="logo-panel">
+                <img src="/logo.png" alt="Logo" class="corner-logo">
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let selectedSensor = localStorage.getItem('selectedSensor') || '';
+        let tempData = [];
+        let tempHistory = [];
+        const MAX_POINTS = 360;
+
+        // Initialize when DOM loads
+        document.addEventListener('DOMContentLoaded', () => {
+            initGraph();
+            setupEventSource();
+        });
+
+        function setupEventSource() {
+            const eventSource = new EventSource('/events');
+            
+            eventSource.addEventListener('relayStates', (e) => {
+                try {
+                    const states = JSON.parse(e.data);
+                    updateRelayButton(1, states.relay1);
+                    updateRelayButton(2, states.relay2);
+                } catch (err) {
+                    console.error('Error updating relay states:', err);
+                }
+            });
+            
+            eventSource.addEventListener('sensors', handleSensorData);
+        }
+
+        function handleSensorData(event) {
+            try {
+                const sensors = JSON.parse(event.data);
+                tempData = sensors;
+                
+                // Update for selected sensor
+                if (selectedSensor) {
+                    const sensor = sensors.find(s => s.address === selectedSensor);
+                    if (sensor) {
+                        updateGraph(sensor.temp);
+                    }
+                }
+                
+                updateSensorList(sensors);
+            } catch (err) {
+                console.error('Error parsing sensor data:', err);
+            }
+        }
+
+        function onSensorSelected(address) {
+            selectedSensor = address;
+            localStorage.setItem('selectedSensor', address);
+            
+            // Update display with current data
+            if (tempData.length > 0) {
+                const sensor = tempData.find(s => s.address === address);
+                if (sensor) {
+                    updateTempDisplay(sensor.temp);
+                    tempHistory = []; // Reset history for new sensor
+                    updateGraph(sensor.temp);
+                }
+            }
+        }
+
+        function updateSensorList(sensors) {
+            const list = document.getElementById('sensorList');
+            const picker = document.getElementById('sensorPicker');
+            
+            // Update sensor list
+            list.innerHTML = sensors.map(s => `
+                <div class="sensor-item">
+                    <span>${s.address}</span>
+                    <span>${s.temp.toFixed(1)}°C</span>
+                </div>
+            `).join('');
+            
+            // Update picker options
+            if (picker.options.length === 0) {
+                sensors.forEach(s => {
+                    picker.add(new Option(s.address, s.address));
+                });
+                if (selectedSensor) picker.value = selectedSensor;
+            }
+        }
+
+        function updateTempDisplay(temp) {
+            const display = document.getElementById('tempDisplay');
+            display.textContent = `${temp.toFixed(1)}°C`;
+        }
+
+        function setRelay(relay, state) {
+            fetch(`/relay${relay}/set`, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+                body: `state=${state ? 'on' : 'off'}`
+            })
+            .then(response => {
+                if (response.ok) {
+                    updateRelayButton(relay, state);
+                }
+            });
+        }
+
+        function updateRelayButton(relay, state) {
+            // Use more specific selector to target correct relay group
+            const buttons = document.querySelectorAll(
+                `#relay${relay}-controls .relay-button`
+            );
+            
+            buttons.forEach(btn => {
+                btn.classList.remove('active', 'inactive');
+                if ((state && btn.textContent === 'ON') || 
+                    (!state && btn.textContent === 'OFF')) {
+                    btn.classList.add('active');
+                } else {
+                    btn.classList.add('inactive');
+                }
+            });
+            
+            // Update state display
+            const stateElement = document.getElementById(`relay${relay}-state`);
+            if (stateElement) {
+                stateElement.textContent = state ? "ON" : "OFF";
+                stateElement.className = `relay-state ${state ? 'on' : 'off'}`;
+            }
+        }
+
+        function updateRelayStateDisplay(relay, state) {
+            const stateElement = document.getElementById(`relay${relay}-state`);
+            if (stateElement) {
+                stateElement.textContent = state ? "ON" : "OFF";
+                stateElement.className = `relay-state ${state ? 'on' : 'off'}`;
+            }
+        }
+
+        function getInitialRelayStates() {
+            [1, 2].forEach(relay => {
+                fetch(`/relay${relay}/state`)
+                    .then(response => response.text())
+                    .then(state => {
+                        updateRelayButton(relay, state === 'ON');
+                    });
+            });
+        }
+
+        function initGraph() {
+            const svg = document.getElementById('tempGraph');
+            const grid = svg.querySelector('.grid');
+            const labels = svg.querySelector('.labels');
+            
+            // Add Y axis grid and labels
+            for(let i = 0; i <= 6; i++) {
+                const y = 50 + i * 33.3;
+                const temp = 40 - i * 10;
+                grid.innerHTML += `<line x1="50" y1="${y}" x2="950" y2="${y}" class="grid-line"/>`;
+                labels.innerHTML += `<text x="45" y="${y}" text-anchor="end">${temp}°C</text>`;
+            }
+            
+            // Add X axis grid and labels
+            for(let i = 0; i <= 6; i++) {
+                const x = 50 + i * 150;
+                const hour = 6 - i;
+                grid.innerHTML += `<line x1="${x}" y1="50" x2="${x}" y2="250" class="grid-line"/>`;
+                labels.innerHTML += `<text x="${x}" y="270" text-anchor="middle">${hour}h</text>`;
+            }
+        }
+
+        function updateGraph(temp) {
+            if (!selectedSensor) return;
+            
+            const now = Date.now();
+            tempHistory.push({temp, time: now});
+            
+            // Keep last 360 points (6 hours)
+            while (tempHistory.length > MAX_POINTS) {
+                tempHistory.shift();
+            }
+            
+            // Draw path
+            const path = document.querySelector('.temp-line');
+            const width = 950;
+            const height = 250;
+            const padding = 50;
+            
+            const points = tempHistory.map((data, i) => {
+                const x = width - ((tempHistory.length - 1 - i) * (width - 2*padding) / MAX_POINTS);
+                const y = height - ((data.temp + 20) / 60 * (height - 2*padding));
+                return `${x},${y}`;
+            });
+            
+            if (points.length > 0) {
+                path.setAttribute('d', `M${points.join(' L')}`);
+            }
+        }
+
+        // Initialize graph on load
+        document.addEventListener('DOMContentLoaded', initGraph);
+        document.addEventListener('DOMContentLoaded', getInitialRelayStates);
+    </script>
+</body>
+</html>
