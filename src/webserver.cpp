@@ -495,6 +495,75 @@ const char TempWebServer::DASHBOARD_HTML[] PROGMEM = R"rawliteral(
         });
 
         document.getElementById('sensorPicker').value = selectedSensor;
+        
+        const tempHistory = [];
+        const MAX_POINTS = 360; // 6 hours at 1 reading/minute
+        
+        function updateGraph() {
+            if (!selectedSensor || !tempData) return;
+            
+            const svg = document.getElementById('tempGraph');
+            const path = document.getElementById('tempLine');
+            const width = svg.clientWidth;
+            const height = svg.clientHeight;
+            const padding = 40;
+            
+            // Find sensor data
+            const sensorData = tempData.find(s => s.address === selectedSensor);
+            if (!sensorData) return;
+            
+            // Update history
+            tempHistory.push({
+                temp: sensorData.temp,
+                time: new Date()
+            });
+            
+            if (tempHistory.length > MAX_POINTS) {
+                tempHistory.shift();
+            }
+            
+            // Scale data points
+            const xScale = (width - 2 * padding) / (tempHistory.length - 1);
+            const yMin = Math.min(...tempHistory.map(d => d.temp));
+            const yMax = Math.max(...tempHistory.map(d => d.temp));
+            const yScale = (height - 2 * padding) / (yMax - yMin || 1);
+            
+            // Create path
+            let pathD = '';
+            tempHistory.forEach((point, i) => {
+                const x = padding + (i * xScale);
+                const y = height - padding - ((point.temp - yMin) * yScale);
+                pathD += `${i === 0 ? 'M' : 'L'} ${x} ${y}`;
+            });
+            
+            path.setAttribute('d', pathD);
+            
+            // Update grid and labels
+            updateGridAndLabels(svg, width, height, padding, yMin, yMax);
+        }
+        
+        function updateGridAndLabels(svg, width, height, padding, yMin, yMax) {
+            const grid = document.getElementById('gridLines');
+            const labels = document.getElementById('axisLabels');
+            grid.innerHTML = '';
+            labels.innerHTML = '';
+            
+            // Add horizontal grid lines
+            for (let i = 0; i <= 4; i++) {
+                const y = padding + i * (height - 2 * padding) / 4;
+                const temp = yMax - (i * (yMax - yMin) / 4);
+                grid.innerHTML += `<line x1="${padding}" y1="${y}" x2="${width-padding}" y2="${y}" class="grid-line"/>`;
+                labels.innerHTML += `<text x="${padding-5}" y="${y}" class="temp-label" text-anchor="end">${temp.toFixed(1)}°C</text>`;
+            }
+            
+            // Add time labels
+            for (let i = 0; i <= 6; i++) {
+                const x = padding + i * (width - 2 * padding) / 6;
+                const hours = 6 - i;
+                grid.innerHTML += `<line x1="${x}" y1="${padding}" x2="${x}" y2="${height-padding}" class="grid-line"/>`;
+                labels.innerHTML += `<text x="${x}" y="${height-padding+20}" class="time-label" text-anchor="middle">${hours}h</text>`;
+            }
+        }
     </script>
 </body>
 </html>
