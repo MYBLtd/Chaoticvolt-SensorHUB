@@ -20,6 +20,9 @@ private:
     SemaphoreHandle_t networkMutex;
     TaskHandle_t taskHandle;  // Don't use xTaskHandle name
 
+    // Add this function declaration
+    void updateRelayState(uint8_t pin, bool state);
+
 public:
     TempWebServer(uint16_t port = 80);
     void begin();

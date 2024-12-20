@@ -51,7 +51,7 @@ body {
   background-color: #f0f0f0;
 }
 
-.page-container {
+.page-container {å
   display: flex;
   flex-direction: column;
   width: 100%;
@@ -245,50 +245,129 @@ const char TempWebServer::DASHBOARD_HTML[] PROGMEM = R"rawliteral(
 <!DOCTYPE html>
 <html>
 <head>
-    <meta charset="UTF-8">
-    <title>Chaoticvolt SensorHUB01 Dashboard</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Temperature Dashboard</title>
     <link rel="stylesheet" href="/style.css">
+    <style>
+        /* Add vertical spacing between rows */
+        .header-panel {
+            margin-bottom: 10px;
+        }
+        .dashboard {
+            margin-bottom: 10px;
+        }
+        
+        /* Style for button groups */
+        .relay-button-group {
+            display: flex;
+            gap: 5px;
+            margin-top: 5px;
+            justify-content: center;
+        }
+
+        /* Center temperature content */
+        .control-panel {
+            text-align: center;
+        }
+
+        .temp-display {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            margin-bottom: 20px;
+        }
+
+        .temp-display h2 {
+            margin-bottom: 10px;
+        }
+
+        #tempDisplay {
+            font-size: 2.5em;
+            font-weight: bold;
+            margin: 10px 0;
+        }
+
+        .relay-controls {
+            text-align: center;
+        }
+
+        .relay {
+            margin: 15px 0;
+        }
+
+        .sensor-select {
+            margin-top: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 10px;
+        }
+
+        #sensorPicker {
+            width: 80%;
+            padding: 5px;
+            text-align: center;
+        }
+    </style>
 </head>
 <body>
     <div class="page-container">
+        <!-- First row - Single column with title -->
         <div class="header-panel">
-            <h1 class="page-title">Chaoticvolt SensorHUB01 Dashboard</h1>
+            <h1 class="page-title">Temperature Monitoring System</h1>
         </div>
+        
+        <!-- Second row - Two columns (1/3 and 2/3) -->
         <div class="dashboard">
             <div class="control-panel">
-                <h2>Buffervat Temperatuur</h2>
-                <div class="temperature-display">
-                    <span id="temp">--</span>°C
+                <div class="temp-display">
+                    <h2>Current Temperature</h2>
+                    <div id="tempDisplay">--.-</div>
+                    <span>°C</span>
                 </div>
-                <div class="controls">
-                    <div class="control-group">
-                        <h3>Pomp CV</h3>
-                        <button onclick="setRelay(1, 'ON')" class="btn">ON</button>
-                        <button onclick="setRelay(1, 'OFF')" class="btn">OFF</button>
+                
+                <div class="relay-controls">
+                    <h2>Relay Controls</h2>
+                    <div class="relay">
+                        <label>Relay 1:</label>
+                        <div class="relay-button-group">
+                            <button onclick="setRelay(1, true)" class="btn">On</button>
+                            <button onclick="setRelay(1, false)" class="btn">Off</button>
+                        </div>
                     </div>
-                    <div class="control-group">
-                        <h3>Pomp Solar</h3>
-                        <button onclick="setRelay(2, 'ON')" class="btn">ON</button>
-                        <button onclick="setRelay(2, 'OFF')" class="btn">OFF</button>
+                    <div class="relay">
+                        <label>Relay 2:</label>
+                        <div class="relay-button-group">
+                            <button onclick="setRelay(2, true)" class="btn">On</button>
+                            <button onclick="setRelay(2, false)" class="btn">Off</button>
+                        </div>
+                    </div>
+                    <div class="sensor-select">
+                        <label for="sensorPicker">Monitor Sensor:</label>
+                        <select id="sensorPicker" onchange="onSensorSelected(this.value)">
+                            <option value="">Select Sensor...</option>
+                        </select>
                     </div>
                 </div>
-                <div id="status"></div>
             </div>
+            
             <div class="graph-panel">
                 <h2>Temperature History</h2>
-                <svg class="graph-svg" width="1000" height="300" viewBox="0 0 1000 300">
-                    <g class="grid"></g>
-                    <g class="labels"></g>
-                    <path class="temp-line" d=""/>
+                <svg id="tempGraph" class="graph-svg" preserveAspectRatio="none">
+                    <path id="tempLine" stroke="blue" fill="none" stroke-width="2"/>
+                    <g id="gridLines"></g>
+                    <g id="axisLabels"></g>
                 </svg>
             </div>
         </div>
+        
+        <!-- Third row - Two equal columns -->
         <div class="bottom-row">
             <div class="sensor-panel">
-                <h2>Sensors</h2>
+                <h2>All Sensors</h2>
                 <div id="sensorList" class="sensor-list"></div>
             </div>
+            
             <div class="logo-panel">
                 <div class="logo-container">
                     <img src="/logo.png" alt="Logo" class="corner-logo">
@@ -296,203 +375,126 @@ const char TempWebServer::DASHBOARD_HTML[] PROGMEM = R"rawliteral(
             </div>
         </div>
     </div>
-
+    
     <script>
-        const eventSource = new EventSource('/events');
-        const tempDisplay = document.getElementById('temp');
-        console.log('EventSource initialized');
+        let selectedSensor = localStorage.getItem('selectedSensor') || '';
+        let tempData = [];
+        const maxDataPoints = 50;
 
-        eventSource.onopen = () => {
-            console.log('EventSource connected');
-        };
-
-        eventSource.onerror = (err) => {
-            console.error('EventSource error:', err);
-        };
-
-        eventSource.addEventListener('temperature', (e) => {
-            console.log('Temperature event received:', e.data);
-            const temp = parseFloat(e.data);
-            if (!isNaN(temp)) {
-                tempDisplay.textContent = temp.toFixed(1);
-                updateGraph(temp);
-            }
-        });
-
-        eventSource.addEventListener('sensors', (e) => {
-            console.log('Received sensor data:', e.data);
-            try {
-                const sensors = JSON.parse(e.data);
-                if (sensors && Array.isArray(sensors)) {
-                    updateSensorList(sensors);
-                    console.log('Updated sensor list with:', sensors);
-                }
-            } catch (err) {
-                console.error('Error parsing sensor data:', err);
-            }
-        });
-
-        function updateSensorList(sensors) {
-            const container = document.getElementById('sensorList');
-            if (!container) return;
-            
-            container.innerHTML = sensors.map(sensor => `
-                <div class="sensor-card">
-                    <div class="sensor-id">${sensor.address}</div>
-                    <div class="sensor-temp">${sensor.temp.toFixed(1)}°C</div>
-                </div>
-            `).join('');
-        }
-
-        const statusDisplay = document.getElementById('status');
-        const svg = document.querySelector('.graph-svg');
-        const tempLine = svg.querySelector('.temp-line');
-        const tempHistory = [];
-        const MAX_POINTS = 360; // 6 hours
-        
-        // Add cache for sensor data
-        let cachedSensorData = [];
-        
-        function updateSensorList(sensors) {
-            // Update cache
-            cachedSensorData = sensors;
-            const sensorList = document.getElementById('sensor-list');
-            sensorList.innerHTML = cachedSensorData.map(sensor => `
-                <div class="sensor-row">
-                    <span class="sensor-address">${sensor.address}</span>
-                    <span class="sensor-value">${sensor.value.toFixed(1)}°C</span>
-                </div>
-            `).join('');
-        }
-
-        // Display cached data on page load
-        updateSensorList(cachedSensorData);
-
-        eventSource.addEventListener('sensors', (e) => {
-            const sensors = JSON.parse(e.data);
-            if (sensors && sensors.length > 0) {
-                const container = document.getElementById('sensorList');
-                if (!container) return;
-                
-                container.innerHTML = sensors.map(sensor => `
-                    <div class="sensor-row">
-                        <span class="sensor-address">${sensor.address}</span>
-                        <span class="sensor-value">${sensor.temp.toFixed(1)}°C</span>
-                    </div>
-                `).join('');
-            }
-        });
-
-        eventSource.addEventListener('sensors', function(e) {
-            const sensors = JSON.parse(e.data);
-            cachedSensorData = sensors; // Update cache
-            updateSensorList(sensors);
-        });
-
-        function updateSensorList(sensors) {
-            const container = document.getElementById('sensorList');
-            if (!container) return;
-            
-            container.innerHTML = sensors.map(sensor => `
-                <div class="sensor-card">
-                    <div class="sensor-id">${sensor.address}</div>
-                    <div class="sensor-temp">${sensor.temp.toFixed(1)}°C</div>
-                </div>
-            `).join('');
-        }
-
-        eventSource.onopen = () => {
-            statusDisplay.textContent = 'Live updates actief';
-            statusDisplay.style.color = '#4CAF50';
-        };
-
-        eventSource.onerror = () => {
-            statusDisplay.textContent = 'Geen live updates';
-            statusDisplay.style.color = '#f44336';
-            // Keep displaying cached data during connection issues
-            if (cachedSensorData.length > 0) {
-                updateSensorList(cachedSensorData);
-            }
-        };
-
-        function initGrid() {
-            const grid = svg.querySelector('.grid');
-            const labels = svg.querySelector('.labels');
-            
-            // Horizontal grid lines and temperature labels
-            for(let i = 0; i <= 5; i++) {
-                const y = 50 + i * 40;
-                grid.innerHTML += `<line x1="50" y1="${y}" x2="950" y2="${y}" class="grid-line"/>`;
-                labels.innerHTML += `<text x="30" y="${y + 5}" class="axis-label">${40 - i * 10}°C</text>`;
-            }
-            
-            // Time labels
-            for(let i = 0; i <= 6; i++) {
-                const x = 50 + i * 150;
-                grid.innerHTML += `<line x1="${x}" y1="50" x2="${x}" y2="250" class="grid-line"/>`;
-                labels.innerHTML += `<text x="${x}" y="270" class="axis-label">${6 - i}h ago</text>`;
-            }
-        }
-        
-        function updateGraph(temp) {
-            const now = Date.now();
-            tempHistory.push({temp: temp, time: now});
-            
-            // Keep only last 6 hours of data (360 points at 1 per minute)
-            while (tempHistory.length > MAX_POINTS) {
-                tempHistory.shift();
-            }
-            
-            // Generate SVG path with proper time scaling
-            const points = tempHistory.map((data, i) => {
-                const x = 950 - ((tempHistory.length - 1 - i) * (900 / MAX_POINTS));
-                const y = 250 - ((data.temp + 30) / 70 * 200); // Scale temp to graph height
-                return `${x},${y}`;
-            });
-            
-            // Update path
-            if (points.length > 0) {
-                tempLine.setAttribute('d', `M${points.join(' L')}`);
-            }
-            
-            // Update grid labels
-            updateGridLabels();
-        }
-
-        function updateGridLabels() {
-            const labels = document.querySelectorAll('.time-label');
-            const now = new Date();
-            
-            labels.forEach((label, i) => {
-                const hoursAgo = 6 - i;
-                const time = new Date(now - hoursAgo * 3600000);
-                label.textContent = time.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
-            });
-        }
-
-        // Initialize grid with time labels
-        initGrid();
-
-        // Update every minute
-        setInterval(() => updateGridLabels(), 60000);
-        
-        eventSource.addEventListener('temperature', (e) => {
-            const temp = parseFloat(e.data);
-            tempDisplay.textContent = temp.toFixed(1);
-            updateGraph(temp);
-        });
-
-        function setRelay(relay, state) {
-            fetch(`/relay${relay}/set`, {
+        function setRelay(relayNumber, state) {
+            fetch(`/relay${relayNumber}/set`, {
                 method: 'POST',
-                headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-                body: `state=${state}`
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                },
+                body: `state=${state ? 'on' : 'off'}`
             })
             .then(response => response.text())
-            .then(result => console.log('Relay result:', result))
+            .then(status => console.log(`Relay ${relayNumber} set to ${state ? 'ON' : 'OFF'}`))
             .catch(error => console.error('Error:', error));
         }
 
+        function onSensorSelected(sensorAddress) {
+            selectedSensor = sensorAddress;
+            localStorage.setItem('selectedSensor', sensorAddress);
+            updateTempDisplay();
+            updateGraph();
+        }
+
+        function updateSensorPicker(sensors) {
+            const picker = document.getElementById('sensorPicker');
+            picker.innerHTML = '<option value="">Select Sensor...</option>';
+            sensors.forEach(sensor => {
+                const option = document.createElement('option');
+                option.value = sensor.address;
+                option.textContent = sensor.address;
+                picker.appendChild(option);
+            });
+            picker.value = selectedSensor;
+        }
+
+        function updateTempDisplay() {
+            const tempDisplay = document.getElementById('tempDisplay');
+            const currentSensor = tempData.find(sensor => sensor.address === selectedSensor);
+            if (currentSensor) {
+                tempDisplay.textContent = currentSensor.temp.toFixed(1);
+            } else {
+                tempDisplay.textContent = '--.-';
+            }
+        }
+
+        function updateGraph() {
+            const svg = document.getElementById('tempGraph');
+            const path = document.getElementById('tempLine');
+            const width = svg.width.baseVal.value;
+            const height = svg.height.baseVal.value;
+            const padding = 40;
+
+            const currentSensorData = tempData.filter(data => data.address === selectedSensor);
+            const dataPoints = currentSensorData.slice(-maxDataPoints);
+
+            if (dataPoints.length < 2) return;
+
+            const xScale = (width - 2 * padding) / (dataPoints.length - 1);
+            const yMin = Math.min(...dataPoints.map(d => d.temp));
+            const yMax = Math.max(...dataPoints.map(d => d.temp));
+            const yScale = (height - 2 * padding) / (yMax - yMin);
+
+            let pathD = `M ${padding} ${height - padding - (dataPoints[0].temp - yMin) * yScale}`;
+            for (let i = 1; i < dataPoints.length; i++) {
+                pathD += ` L ${padding + i * xScale} ${height - padding - (dataPoints[i].temp - yMin) * yScale}`;
+            }
+            path.setAttribute('d', pathD);
+
+            updateGridAndLabels(svg, width, height, padding, yMin, yMax);
+        }
+
+        function updateGridAndLabels(svg, width, height, padding, yMin, yMax) {
+            const gridLines = document.getElementById('gridLines');
+            const axisLabels = document.getElementById('axisLabels');
+            gridLines.innerHTML = '';
+            axisLabels.innerHTML = '';
+
+            for (let i = 0; i <= 4; i++) {
+                const x = padding + i * (width - 2 * padding) / 4;
+                gridLines.innerHTML += `<line x1="${x}" y1="${padding}" x2="${x}" y2="${height - padding}" class="grid-line" />`;
+                axisLabels.innerHTML += `<text x="${x}" y="${height - padding + 20}" class="axis-label">${-50 + i * 25}m</text>`;
+            }
+
+            for (let i = 0; i <= 4; i++) {
+                const y = height - padding - i * (height - 2 * padding) / 4;
+                gridLines.innerHTML += `<line x1="${padding}" y1="${y}" x2="${width - padding}" y2="${y}" class="grid-line" />`;
+                const temp = yMin + (i / 4) * (yMax - yMin);
+                axisLabels.innerHTML += `<text x="${padding - 10}" y="${y}" class="axis-label" text-anchor="end">${temp.toFixed(1)}°C</text>`;
+            }
+        }
+
+        function updateSensorList(sensors) {
+            const sensorList = document.getElementById('sensorList');
+            sensorList.innerHTML = '';
+            sensors.forEach(sensor => {
+                const sensorDiv = document.createElement('div');
+                sensorDiv.className = 'sensor-card';
+                sensorDiv.innerHTML = `
+                    <div class="sensor-id">${sensor.address}</div>
+                    <div class="sensor-temp">${sensor.temp.toFixed(1)}°C</div>
+                `;
+                sensorList.appendChild(sensorDiv);
+            });
+        }
+
+        const eventSource = new EventSource('/events');
+
+        eventSource.addEventListener('sensors', function(e) {
+            const sensors = JSON.parse(e.data);
+            tempData = sensors;
+            updateSensorPicker(sensors);
+            updateSensorList(sensors);
+            updateTempDisplay();
+            updateGraph();
+        });
+
+        document.getElementById('sensorPicker').value = selectedSensor;
     </script>
 </body>
 </html>
@@ -523,6 +525,85 @@ void TempWebServer::begin() {
     // Add handlers
     addHandler(&events);
 
+    // Add CORS headers
+    DefaultHeaders::Instance().addHeader("Access-Control-Allow-Origin", "*");
+    
+    // Serve static files
+    on("/", HTTP_GET, [this](AsyncWebServerRequest *request) {
+        request->send(200, "text/html", DASHBOARD_HTML);
+    });
+
+    on("/style.css", HTTP_GET, [this](AsyncWebServerRequest *request) {
+        request->send(200, "text/css", DASHBOARD_CSS);
+    });
+
+    on("/logo.png", HTTP_GET, [](AsyncWebServerRequest *request) {
+        request->send(SPIFFS, "/logo.png", "image/png");
+    });
+        // Add relay control endpoints
+    on("/relay1/set", HTTP_POST, [this](AsyncWebServerRequest *request) {
+        if (request->hasParam("state", true)) {
+            String state = request->getParam("state", true)->value();
+            bool newState = (state == "on" || state == "1" || state == "true");
+            
+            // Update global state
+            updateRelayState(SYSTEM_RELAY1_PIN, newState);
+            
+            // Publish via MQTT
+            if (mqttManager) {
+                String topic = String(SYSTEM_NAME) + "/" + 
+                              String(MQTT_CLIENT_ID) + "/" + 
+                              SYSTEM_RELAY1_TOPIC;
+                
+                if (mqttManager->publishTopic(topic.c_str(), newState ? "on" : "off")) {
+                    request->send(200, "text/plain", "OK");
+                } else {
+                    request->send(500, "text/plain", "Failed to publish");
+                }
+            } else {
+                request->send(500, "text/plain", "MQTT not initialized");
+            }
+        }
+    });
+
+    on("/relay2/set", HTTP_POST, [this](AsyncWebServerRequest *request) {
+        if (request->hasParam("state", true)) {
+            String state = request->getParam("state", true)->value();
+            bool newState = (state == "on" || state == "1" || state == "true");
+            
+            // Update global state
+            updateRelayState(SYSTEM_RELAY2_PIN, newState);
+            
+            // Publish via MQTT
+            if (mqttManager) {
+                String topic = String(SYSTEM_NAME) + "/" + 
+                              String(MQTT_CLIENT_ID) + "/" + 
+                              SYSTEM_RELAY2_TOPIC;
+                
+                if (mqttManager->publishTopic(topic.c_str(), newState ? "on" : "off")) {
+                    request->send(200, "text/plain", "OK");
+                } else {
+                    request->send(500, "text/plain", "Failed to publish");
+                }
+            } else {
+                request->send(500, "text/plain", "MQTT not initialized");
+            }
+        }
+    });
+
+    on("/relay1", HTTP_POST, [this](AsyncWebServerRequest *request) {
+        // Get state parameter from request
+        if (!request->hasParam("state", true)) {
+            request->send(400, "text/plain", "Missing state parameter");
+            return;
+        }
+        
+        String stateParam = request->getParam("state", true)->value();
+        bool newState = (stateParam == "on" || stateParam == "1" || stateParam == "true");
+        
+        this->updateRelayState(SYSTEM_RELAY1_PIN, newState);
+        request->send(200, "text/plain", newState ? "ON" : "OFF");
+    });
     // Start web server
     AsyncWebServer::begin();
     Serial.println("Web server started");
@@ -575,5 +656,13 @@ bool MQTTManager::publishTopic(const char* topic, const char* payload) {
     return mqttClient.publish(topic, payload, true);  // Retained message
 }
 
-
+void TempWebServer::updateRelayState(uint8_t pin, bool state) {
+    pinMode(pin, OUTPUT);
+    digitalWrite(pin, state ? HIGH : LOW);
+    
+    // Optional: Log relay state change
+    Serial.printf("[WebServer] Relay pin %d set to %s\n", 
+                 pin, 
+                 state ? "ON" : "OFF");
+}
 
