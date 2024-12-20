@@ -12,6 +12,7 @@
 #include "mqtt_manager.h"
 #include "onewire_manager.h"
 #include "webserver.h"  // Add this line
+#include <SPIFFS.h>  // Add this include
 
 // SSL/Certificate Handling
 #include <WiFiClientSecure.h>
@@ -143,46 +144,62 @@ void setupEthernet() {
 }
 
 void setup() {
-    // Get the singleton instance first
-    MQTTManager& mqttManager = MQTTManager::getInstance();
-    
-    // Setup serial and network
     Serial.begin(115200);
+    
+    // Initialize Ethernet first
     setupEthernet();
     
-    // Create MQTT reconnect task
-    xTaskCreate(
-        MQTTManager::mqttReconnectTask,
-        "MQTT Reconnect",
-        MQTT_RECONNECT_STACK_SIZE,
+    // Wait for network
+    while (!ETH.linkUp()) {
+        delay(100);
+    }
+    
+    if(!SPIFFS.begin(true)) {
+        Serial.println("SPIFFS Mount Failed");
+        return;
+    }
+    
+    // Create web server task
+    xTaskCreatePinnedToCore(
+        [](void* parameter) {
+            webServer.begin();
+            for(;;) {
+                vTaskDelay(pdMS_TO_TICKS(100));
+            }
+        },
+        "WebTask",
+        8192,        // Larger stack
         NULL,
-        1,
-        &mqttReconnectTaskHandle
+        2,          // Higher priority
+        NULL,
+        1          // Run on core 1
     );
     
-    // Initialize MQTT manager (call begin only once)
-    mqttManager.begin();
-
-    // In setup()
+    // Initialize OneWire before MQTT
     initOneWire();
-    initWebServer();
     
-    xTaskCreate(
-        TaskScanSensors,
-        "ScanSensors",
-        4096,
-        NULL,
-        1,
-        NULL
-    );
-
-    xTaskCreate(
+    // Start MQTT manager last
+    MQTTManager::getInstance().begin();
+    
+    // Create sensor tasks
+    xTaskCreatePinnedToCore(
         TaskReadTemperature,
-        "ReadTemp",
+        "TempTask",
         4096,
         NULL,
-        1,
-        NULL
+        1,  // Lower priority
+        NULL,
+        0   // Core 0
+    );
+    
+    xTaskCreatePinnedToCore(
+        TaskScanSensors,
+        "ScanTask",
+        4096,
+        NULL,
+        1,  // Lower priority
+        NULL,
+        0   // Core 0
     );
 }
 
@@ -204,12 +221,9 @@ void publishState() {
     }
 }
 
-// Modify loop() to include state publishing
+// Minimal loop since tasks handle the work
 void loop() {
-    // Get singleton instance
-    MQTTManager& mqttManager = MQTTManager::getInstance();
-    mqttManager.loop();
-    vTaskDelay(pdMS_TO_TICKS(100));
+    vTaskDelay(pdMS_TO_TICKS(1000));  // Prevent watchdog triggers
 }
 
 // In your loop or task function

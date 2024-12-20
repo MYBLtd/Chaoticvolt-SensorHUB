@@ -34,6 +34,8 @@ const uint32_t READ_INTERVAL_MS = 6000;  // milliseconds
 // Increase task stack sizes
 #define MQTT_TASK_STACK_SIZE (8192)
 #define DEFAULT_TASK_PRIORITY (1)
+#define MQTT_TASK_PRIORITY (2)        // Higher than default
+#define ONEWIRE_TASK_PRIORITY (1)     // Standard priority
 
 // NTP Configuration
 #define NTP_SERVER "2.europe.pool.ntp.org"

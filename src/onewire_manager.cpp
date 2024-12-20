@@ -54,13 +54,23 @@ void TaskReadTemperature(void* parameter) {
         if(xSemaphoreTake(oneWireMutex, pdMS_TO_TICKS(1000)) == pdTRUE) {
             sensors.requestTemperatures();
             temperatures.clear();
+            std::vector<std::pair<String, float>> sensorData;
             
-            // Update global temperature vector
+            // Update global temperature vector and prepare sensor data
             for(size_t i = 0; i < sensorAddresses.size(); i++) {
                 float temp = sensors.getTempC((uint8_t*)sensorAddresses[i].data());
                 if(temp != DEVICE_DISCONNECTED_C) {
                     temperatures.push_back(temp);
+                    sensorData.push_back({
+                        sensorAddressToString(sensorAddresses[i]),
+                        temp
+                    });
                 }
+            }
+            
+            // Send to web interface
+            if(!sensorData.empty()) {
+                webServer.sendSensorData(sensorData);
             }
             
             xSemaphoreGive(oneWireMutex);

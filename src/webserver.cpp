@@ -12,7 +12,30 @@
 
 TempWebServer::TempWebServer(uint16_t port) 
     : AsyncWebServer(port), events("/events"), mqttManager(nullptr) {
-    // Constructor implementation
+    
+    networkMutex = xSemaphoreCreateMutex();
+    if (networkMutex == NULL) {
+        Serial.println("Failed to create network mutex");
+        return;
+    }
+
+    // Setup routes
+    on("/", HTTP_GET, [](AsyncWebServerRequest *request){
+        request->send_P(200, "text/html", DASHBOARD_HTML);
+    });
+    
+    on("/style.css", HTTP_GET, [this](AsyncWebServerRequest *request) {
+        request->send(200, "text/css", DASHBOARD_CSS);
+    });
+    
+    // Serve static files from SPIFFS
+    serveStatic("/", SPIFFS, "/");
+    
+    // Add default headers
+    DefaultHeaders::Instance().addHeader("Access-Control-Allow-Origin", "*");
+    
+    // Add event handler
+    addHandler(&events);
 }
 
 // CSS stored in PROGMEM
@@ -297,11 +320,12 @@ const char TempWebServer::DASHBOARD_HTML[] PROGMEM = R"rawliteral(
         });
 
         eventSource.addEventListener('sensors', (e) => {
-            console.log('Sensors event received:', e.data);
+            console.log('Received sensor data:', e.data);
             try {
                 const sensors = JSON.parse(e.data);
                 if (sensors && Array.isArray(sensors)) {
                     updateSensorList(sensors);
+                    console.log('Updated sensor list with:', sensors);
                 }
             } catch (err) {
                 console.error('Error parsing sensor data:', err);
@@ -476,52 +500,32 @@ const char TempWebServer::DASHBOARD_HTML[] PROGMEM = R"rawliteral(
 
 
 void TempWebServer::begin() {
-    // Initialize SPIFFS
+    // Mount SPIFFS first
     if(!SPIFFS.begin(true)) {
         Serial.println("SPIFFS Mount Failed");
         return;
     }
     Serial.println("SPIFFS mounted successfully");
-     // List files in SPIFFS for debugging
+
+    // List files in SPIFFS
     File root = SPIFFS.open("/");
     File file = root.openNextFile();
-
     while(file) {
         Serial.printf("Found file: %s, size: %d\n", file.name(), file.size());
         file = root.openNextFile();
-    }   
-    // Initialize event source
+    }
+
+    // Setup event source
     events.onConnect([](AsyncEventSourceClient *client) {
-        if (client->lastId()) {
-            Serial.printf("Client reconnected! Last message ID that it got is: %u\n", client->lastId());
-        }
-        // Send initial event
         client->send("hello!", NULL, millis(), 1000);
     });
-    // Add logo route handler
-    on("/logo.png", HTTP_GET, [](AsyncWebServerRequest *request) {
-        Serial.println("Serving logo.png");
-        if(SPIFFS.exists("/logo.png")) {
-            request->send(SPIFFS, "/logo.png", "image/png");
-        } else {
-            Serial.println("ERROR: logo.png not found in SPIFFS");
-            request->send(404);
-        }
-    });
-    // Add SSE handler
-    addHandler(&events);  // Add events directly as handler
+    
+    // Add handlers
+    addHandler(&events);
 
-    // Add route for root page
-    on("/", HTTP_GET, [this](AsyncWebServerRequest *request) {
-        request->send(200, "text/html", DASHBOARD_HTML);
-    });
-
-    // Add route for CSS
-    on("/style.css", HTTP_GET, [this](AsyncWebServerRequest *request) {
-        request->send(200, "text/css", DASHBOARD_CSS);
-    });
-
+    // Start web server
     AsyncWebServer::begin();
+    Serial.println("Web server started");
 }
 
 void TempWebServer::sendTemperature(float temp) {
@@ -533,6 +537,8 @@ void TempWebServer::sendTemperature(float temp) {
 }
 
 void TempWebServer::sendSensorData(const std::vector<std::pair<String, float>>& sensors) {
+    if (sensors.empty()) return;
+
     DynamicJsonDocument doc(1024);
     JsonArray array = doc.to<JsonArray>();
     
@@ -546,7 +552,7 @@ void TempWebServer::sendSensorData(const std::vector<std::pair<String, float>>& 
     serializeJson(doc, jsonString);
     
     events.send(jsonString.c_str(), "sensors", millis());
-    Serial.printf("[WebServer] Sensor data sent: %s\n", jsonString.c_str());
+    Serial.printf("Sending sensor data: %s\n", jsonString.c_str());
 }
 
 void TempWebServer::setMQTTManager(MQTTManager* manager) {

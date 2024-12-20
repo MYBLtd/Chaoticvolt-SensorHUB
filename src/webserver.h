@@ -17,6 +17,8 @@ private:
     static const char DASHBOARD_HTML[] PROGMEM;
     static const char DASHBOARD_CSS[] PROGMEM;
     MQTTManager* mqttManager;
+    SemaphoreHandle_t networkMutex;
+    TaskHandle_t taskHandle;  // Don't use xTaskHandle name
 
 public:
     TempWebServer(uint16_t port = 80);

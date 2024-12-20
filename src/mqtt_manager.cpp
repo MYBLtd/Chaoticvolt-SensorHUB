@@ -12,46 +12,118 @@
 MQTTManager* MQTTManager::instance = nullptr;
 
 MQTTManager::MQTTManager() : 
-    espClient(),
     mqttClient(espClient),
+    oneWireMutex(xSemaphoreCreateMutex()),  // Initialize mutex first
     lastPublish(0),
-    lastSensorPublish(0),
-    reconnectAttempts(0) {
-    instance = this;  // Set instance pointer
+    reconnectAttempts(0)
+{
+    instance = this;  // Set singleton instance
+    
+    if (oneWireMutex == NULL) {
+        Serial.println("Failed to create mutex");
+        ESP.restart();  // Critical error - restart device
+    }
+    
+    // Clear vectors
+    temperatures.clear();
+    sensorAddresses.clear();
+    
+    setupSecureClient();
+    mqttClient.setServer(MQTT_BROKER, MQTT_PORT);
+    mqttClient.setCallback([this](char* topic, byte* payload, unsigned int length) {
+        this->callback(topic, payload, length);
+    });
+}
+
+MQTTManager::~MQTTManager() {
+    if (oneWireMutex != NULL) {
+        vSemaphoreDelete(oneWireMutex);
+        oneWireMutex = NULL;
+    }
 }
 
 void MQTTManager::begin() {
-    setupSecureClient();
-    mqttClient.setServer(MQTT_BROKER, MQTT_PORT);
+    // Allow TCP/IP stack to initialize completely
+    delay(1000);  // Increased delay
+    
+    // Create task for network operations
+    xTaskCreatePinnedToCore(
+        [](void* parameter) {
+            MQTTManager* manager = (MQTTManager*)parameter;
+            // Initialize network components
+            manager->setupSecureClient();
+            
+            // Configure MQTT with delay between operations
+            delay(100);
+            manager->mqttClient.setServer(MQTT_BROKER, MQTT_PORT);
+            delay(100);
+            
+            // Delete task when done
+            vTaskDelete(NULL);
+        },
+        "MQTT_Init",
+        4096,    // Stack size
+        this,    // Task parameter
+        1,       // Priority
+        NULL,    // Task handle
+        1        // Core ID (run on core 1)
+    );
 }
 
 void MQTTManager::setupSecureClient() {
-    // Complete reset
-    mqttClient.disconnect();
+    Serial.println("Setting up secure client...");
+    
+    // Reset previous connections
     espClient.stop();
-    delay(500); // Longer delay for cleanup
+    delay(100);
     
-    espClient = WiFiClientSecure(); // Create new instance
+    espClient = WiFiClientSecure();
+    
+    // Debug certificate info
+    Serial.printf("CA cert length: %d bytes\n", strlen(let_encrypt_root_ca));
+    
+    // Configure SSL with longer timeouts
     espClient.setCACert(let_encrypt_root_ca);
-    espClient.setHandshakeTimeout(5000);  // Shorter timeout
-    espClient.setTimeout(3000);
+    espClient.setHandshakeTimeout(30000);  // 30 seconds
+    espClient.setTimeout(15000);           // 15 seconds
     
+    // Configure MQTT client
+    mqttClient.setClient(espClient);
     mqttClient.setBufferSize(MQTT_BUFFER_SIZE);
-    mqttClient.setKeepAlive(5);  // More frequent keepalive
-    mqttClient.setSocketTimeout(3);
+    mqttClient.setKeepAlive(30);          // 30 seconds
+    mqttClient.setSocketTimeout(15);       // 15 seconds
+    
+    Serial.println("Secure client setup complete");
 }
 
 void MQTTManager::loop() {
-    if (oneWireMutex != NULL) {
-        if(xSemaphoreTake(oneWireMutex, pdMS_TO_TICKS(1000)) == pdTRUE) {
-            // Access global data structures directly
-            if (!temperatures.empty() && !sensorAddresses.empty()) {
-                publishSensorData(sensorAddresses, temperatures);
-            }
-            xSemaphoreGive(oneWireMutex);
+    static unsigned long lastCheck = 0;
+    unsigned long now = millis();
+    
+    // Add error checking
+    if (!ETH.linkUp()) {
+        Serial.println("Network link down");
+        delay(1000);
+        return;
+    }
+    
+    // Check every second with error handling
+    if (now - lastCheck >= 1000) {
+        lastCheck = now;
+        
+        if (!mqttClient.connected()) {
+            Serial.println("MQTT disconnected, attempting reconnect...");
+            delay(100);  // Add delay before reconnect
+            return;
+        }
+        
+        try {
+            mqttClient.loop();
+        } catch (...) {
+            Serial.println("Error in MQTT loop");
+            delay(1000);
         }
     }
-    mqttClient.loop();
 }
 
 bool MQTTManager::isConnected() {
@@ -76,31 +148,30 @@ void MQTTManager::publishState() {
 
 void MQTTManager::publishSensorData(const std::vector<std::array<uint8_t, 8>>& sensors,
                                   const std::vector<float>& values) {
-    unsigned long now = millis();
-    
-    if (now - lastSensorPublish >= SENSOR_PUBLISH_INTERVAL && mqttClient.connected()) {
-        for (size_t i = 0; i < sensors.size(); i++) {
-            // Convert std::string to const char* before creating Arduino String
-            String sensorTopic = String(SYSTEM_NAME) + "/" + 
-                               String(MQTT_CLIENT_ID) + "/" + 
-                               String(SENSOR_TOPIC_PATH) + "/" + 
-                               String(sensorAddressToString(sensors[i]).c_str());
-            
-            // Create JSON payload for single sensor
-            String payload = "{\"temp\":";
-            payload += String(values[i], 2);
-            payload += "}";
-            
-            bool success = mqttClient.publish(sensorTopic.c_str(), payload.c_str(), true);
-            
-            if (success) {
-                Serial.printf("Published sensor %s: %.2f°C\n", 
-                    sensorAddressToString(sensors[i]).c_str(), 
-                    values[i]);
-            }
-        }
-        lastSensorPublish = now;
+    if (!mqttClient.connected() || sensors.empty() || values.empty() || 
+        sensors.size() != values.size()) {
+        return;
     }
+
+    unsigned long now = millis();
+    if (now - lastSensorPublish < 5000) { // Publish every 5 seconds
+        return;
+    }
+    
+    for (size_t i = 0; i < sensors.size(); i++) {
+        String topic = String(SYSTEM_NAME) + "/" + 
+                      String(MQTT_CLIENT_ID) + "/" + 
+                      String(MQTT_TOPIC_BASE) + "/" + 
+                      sensorAddressToString(sensors[i]).c_str();
+        
+        String payload = String(values[i], 2);
+        
+        if (mqttClient.publish(topic.c_str(), payload.c_str(), true)) {
+            Serial.printf("Published %s: %s\n", topic.c_str(), payload.c_str());
+        }
+    }
+    
+    lastSensorPublish = now;
 }
 
 void MQTTManager::mqttReconnectTask(void* parameter) {
@@ -250,4 +321,33 @@ std::string MQTTManager::sensorAddressToString(const std::array<uint8_t, 8>& add
              address[0], address[1], address[2], address[3],
              address[4], address[5], address[6], address[7]);
     return std::string(buffer);
+}
+
+bool MQTTManager::connect() {
+    if (!espClient.connected()) {
+        Serial.println("SSL not connected, attempting connection...");
+        if (!espClient.connect(MQTT_BROKER, MQTT_PORT)) {
+            Serial.println("SSL connection failed");
+            return false;
+        }
+    }
+    
+    if (!mqttClient.connected()) {
+        return mqttClient.connect(MQTT_CLIENT_ID, MQTT_USERNAME, MQTT_PASSWORD);
+    }
+    
+    return true;
+}
+
+void MQTTManager::callback(char* topic, byte* payload, unsigned int length) {
+    // Convert payload to null-terminated string
+    char message[length + 1];
+    memcpy(message, payload, length);
+    message[length] = '\0';
+    
+    // Log received message
+    Serial.printf("Message arrived [%s]: %s\n", topic, message);
+    
+    // Handle the message here
+    // Add your message handling logic
 }
