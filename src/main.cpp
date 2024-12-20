@@ -8,6 +8,7 @@
 #include <WiFiUdp.h>
 #include <time.h>
 #include "esp_task_wdt.h"
+#include "global_state.h"
 #include "config.h"
 #include "mqtt_manager.h"
 #include "onewire_manager.h"

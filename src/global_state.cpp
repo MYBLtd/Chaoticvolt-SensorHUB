@@ -1,15 +1,17 @@
 #include "global_state.h"
 #include "config.h"
 
-GlobalState gState;
+GlobalState gState;  // Global instance definition
 
 void initializeGlobalState() {
+    gState.mutex = xSemaphoreCreateMutex();
     gState.relay1State = false;
     gState.relay2State = false;
     gState.mqttConnected = false;
     gState.wifiConnected = false;
     gState.lastStatePublish = 0;
     gState.lastSensorPublish = 0;
+    gState.dataUpdated = false;
 }
 
 void updateRelayState(uint8_t relay, bool state) {

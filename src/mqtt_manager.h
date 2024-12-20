@@ -2,6 +2,7 @@
 #define MQTT_MANAGER_H
 
 #include <Arduino.h>
+#include "global_state.h" 
 #include <WiFiClientSecure.h>
 #include <PubSubClient.h>
 #include <ETH.h>

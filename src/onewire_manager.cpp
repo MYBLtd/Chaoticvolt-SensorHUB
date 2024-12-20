@@ -51,29 +51,25 @@ float getTemperature(int index) {
 // Task for reading temperature sensors and publishing data
 void TaskReadTemperature(void* parameter) {
     for(;;) {
-        if(xSemaphoreTake(oneWireMutex, pdMS_TO_TICKS(1000)) == pdTRUE) {
+        if(xSemaphoreTake(gState.mutex, pdMS_TO_TICKS(1000)) == pdTRUE) {
             sensors.requestTemperatures();
-            temperatures.clear();
-            std::vector<std::pair<String, float>> sensorData;
+            gState.temperatures.clear();
+            gState.sensorAddresses.clear();
             
-            // Update global temperature vector and prepare sensor data
+            // Update temperatures in global state
             for(size_t i = 0; i < sensorAddresses.size(); i++) {
                 float temp = sensors.getTempC((uint8_t*)sensorAddresses[i].data());
                 if(temp != DEVICE_DISCONNECTED_C) {
-                    temperatures.push_back(temp);
-                    sensorData.push_back({
-                        sensorAddressToString(sensorAddresses[i]),
-                        temp
-                    });
+                    gState.temperatures.push_back(temp);
+                    gState.sensorAddresses.push_back(sensorAddresses[i]);
                 }
             }
             
-            // Send to web interface
-            if(!sensorData.empty()) {
-                webServer.sendSensorData(sensorData);
-            }
+            // Set data updated flag
+            gState.dataUpdated = true;
+            Serial.println("Global state updated with new sensor data");
             
-            xSemaphoreGive(oneWireMutex);
+            xSemaphoreGive(gState.mutex);
         }
         vTaskDelay(pdMS_TO_TICKS(READ_INTERVAL_MS));
     }

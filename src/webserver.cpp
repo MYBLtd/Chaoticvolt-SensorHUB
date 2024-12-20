@@ -173,6 +173,41 @@ void TempWebServer::begin() {
         1
     );
 
+    // Create sensor data monitoring task
+    xTaskCreatePinnedToCore(
+        [](void* parameter) {
+            TempWebServer* server = (TempWebServer*)parameter;
+            for(;;) {
+                if (xSemaphoreTake(gState.mutex, pdMS_TO_TICKS(1000)) == pdTRUE) {
+                    // Create vector of sensor data
+                    std::vector<std::pair<String, float>> sensorData;
+                    
+                    // Populate sensor data from global state
+                    for (size_t i = 0; i < gState.sensorAddresses.size(); i++) {
+                        sensorData.push_back(std::make_pair(
+                            String(sensorAddressToString(gState.sensorAddresses[i]).c_str()),
+                            gState.temperatures[i]
+                        ));
+                    }
+                    
+                    // Call sendSensorData with the populated vector
+                    server->sendSensorData(sensorData);
+                    
+                    xSemaphoreGive(gState.mutex);
+                } else {
+                    Serial.println("Failed to get mutex for sensor data");
+                }
+                vTaskDelay(pdMS_TO_TICKS(1000));
+            }
+        },
+        "WebMonitor",
+        4096,
+        this,
+        1,
+        NULL,
+        1
+    );
+
     // Start web server
     AsyncWebServer::begin();
     Serial.println("Web server started");
