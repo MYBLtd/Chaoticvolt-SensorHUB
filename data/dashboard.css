@@ -170,3 +170,28 @@ body {
     background-color: #f44336;
     color: white;
 }
+.sensor-item {
+    display: flex;
+    align-items: center;
+    margin: 10px 0;
+    gap: 10px;
+}
+
+.sensor-name-input {
+    padding: 5px;
+    border-radius: 4px;
+    border: 1px solid #ccc;
+}
+
+.save-name-btn {
+    padding: 5px 10px;
+    background: #4CAF50;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+}
+
+.save-name-btn:hover {
+    background: #45a049;
+}

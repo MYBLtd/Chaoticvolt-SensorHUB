@@ -5,9 +5,19 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 
+struct SensorName {
+    std::array<uint8_t, 8> address;
+    char friendlyName[32];
+};
+
 struct GlobalState {
-    // Mutex for thread safety
     SemaphoreHandle_t mutex;
+    bool dataUpdated;
+    std::vector<std::array<uint8_t, 8>> sensorAddresses;
+    std::vector<float> temperatures;
+    std::vector<SensorName> sensorNames;
+    bool hasSelectedSensor;
+    size_t selectedSensorIndex;
     
     // Constructor to properly initialize members
     GlobalState() : 
@@ -36,11 +46,6 @@ struct GlobalState {
             mutex = NULL;
         }
     }
-
-    // Sensor data
-    bool dataUpdated;
-    std::vector<std::array<uint8_t, 8>> sensorAddresses;
-    std::vector<float> temperatures;
     
     // Relay states
     bool relay1State;
@@ -53,10 +58,6 @@ struct GlobalState {
     // Timing
     unsigned long lastStatePublish;
     unsigned long lastSensorPublish;
-
-    // New members for sensor selection
-    bool hasSelectedSensor;
-    size_t selectedSensorIndex;
 };
 
 // Global instance declaration

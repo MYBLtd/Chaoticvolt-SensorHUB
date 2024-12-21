@@ -13,14 +13,13 @@ MQTTManager* MQTTManager::instance = nullptr;
 
 MQTTManager::MQTTManager() : 
     mqttClient(espClient),
-    oneWireMutex(xSemaphoreCreateMutex()),  // Initialize mutex first
+    oneWireMutex(xSemaphoreCreateMutex()),
     lastPublish(0),
     reconnectAttempts(0)
 {
-    instance = this;  // Set singleton instance
+    instance = this;
     
     if (oneWireMutex == NULL) {
-        Serial.println("Failed to create mutex");
         ESP.restart();  // Critical error - restart device
     }
     
@@ -53,15 +52,11 @@ void MQTTManager::begin() {
             
             Serial.println("MQTT: Task started");
             
-            for(;;) {
-                Serial.println("MQTT: Checking state...");
-                
-                if (xSemaphoreTake(gState.mutex, pdMS_TO_TICKS(1000)) == pdTRUE) {
-                    Serial.println("MQTT: Got mutex");
-                    
+            for(;;) {              
+                if (xSemaphoreTake(gState.mutex, pdMS_TO_TICKS(1000)) == pdTRUE) {                   
                     if (gState.dataUpdated) {
-                        Serial.printf("MQTT: Publishing %d sensor values\n", 
-                            gState.sensorAddresses.size());
+                        // Serial.printf("MQTT: Publishing %d sensor values\n", 
+                        //     gState.sensorAddresses.size());
                         
                         manager->publishSensorData(
                             gState.sensorAddresses,
@@ -69,11 +64,11 @@ void MQTTManager::begin() {
                         );
                         gState.dataUpdated = false;
                     } else {
-                        Serial.println("MQTT: No new data");
+                        // Serial.println("MQTT: No new data");
                     }
                     xSemaphoreGive(gState.mutex);
                 } else {
-                    Serial.println("MQTT: Failed to get mutex");
+                    // Serial.println("MQTT: Failed to get mutex");
                 }
                 
                 vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(1000));
@@ -87,7 +82,7 @@ void MQTTManager::begin() {
         1
     );
     
-    Serial.println("MQTT: Manager started");
+    // Serial.println("MQTT: Manager started");
 }
 
 void MQTTManager::setupSecureClient() {
@@ -178,7 +173,7 @@ void MQTTManager::publishSensorData(const std::vector<std::array<uint8_t, 8>>& s
         }
     }
     
-    Serial.printf("MQTT: Publishing %d sensor values\n", sensors.size());
+    // Serial.printf("MQTT: Publishing %d sensor values\n", sensors.size());
     
     for (size_t i = 0; i < sensors.size(); i++) {
         String sensorAddr = String(sensorAddressToString(sensors[i]).c_str());

@@ -1,46 +1,42 @@
 #pragma once
 #include <Arduino.h>
+#include "global_state.h" 
 #include <AsyncTCP.h>
 #include <ESPAsyncWebServer.h>
 #include <vector>
 #include <utility>
 #include <AsyncEventSource.h>
-#include "webserver.h"
-#include "onewire_manager.h"  // Add this line
-#include <SPIFFS.h>  // Add this include
+#include <Preferences.h>  // Add this include
+#include "onewire_manager.h"
+#include <SPIFFS.h>
+#include <ArduinoJson.h>  // Include at the top of webserver.cpp if not already present
 
 // Forward declaration
 class MQTTManager;
 
 class TempWebServer : public AsyncWebServer {
 private:
-    AsyncEventSource events;
+    AsyncEventSource events;  // Object instance, not a pointer
     MQTTManager* mqttManager;
     SemaphoreHandle_t networkMutex;
-    TaskHandle_t taskHandle;  // Don't use xTaskHandle name
+    TaskHandle_t taskHandle;
+    Preferences preferences;  // Now this will work with the include above
 
-    // Add this function declaration
     void updateRelayState(uint8_t pin, bool state);
-    void sendRelayStates();  // Add this declaration
-
+    void sendRelayStates();
+    void loadSensorNames();
+    void saveSensorName(const std::array<uint8_t, 8>& address, const char* name);
+   
 public:
     TempWebServer(uint16_t port = 80);
+    ~TempWebServer();  // Add this line
     void begin();
     void sendTemperature(float temp);
     void sendSensorData(const std::vector<std::pair<String, float>>& sensors);
     void setMQTTManager(MQTTManager* manager);
-
-    // Add this function
-    void handleStyleRequest() {
-        on("/style.css", HTTP_GET, [](AsyncWebServerRequest *request) {
-            if (SPIFFS.exists("/dashboard.css")) {
-                request->send(SPIFFS, "/dashboard.css", "text/css");
-            } else {
-                Serial.println("CSS file not found in SPIFFS");
-                request->send(404, "text/plain", "CSS file not found");
-            }
-        });
-    }
+    void getSensorData(AsyncWebServerRequest *request);  // Add this declaration
+    void handleSetSensorName(AsyncWebServerRequest *request);  // Add this line
+    void handleStyleRequest();
 };
 
 extern TempWebServer webServer;

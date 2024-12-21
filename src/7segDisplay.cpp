@@ -45,31 +45,37 @@ void SegDisplay::showIPAddress(IPAddress ip) {
 // Task to display sequence
 void SegDisplay::displayTask(void* parameter) {
     SegDisplay* display = static_cast<SegDisplay*>(parameter);
+    float lastTemp = DEVICE_DISCONNECTED_C;
+    size_t lastIndex = 0;
     
     for(;;) {
-        if (xSemaphoreTake(gState.mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
-            // Check if we have any sensors at all
+        bool dataUpdated = false;
+        float currentTemp = DEVICE_DISCONNECTED_C;
+        
+        if (xSemaphoreTake(gState.mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
             if (!gState.temperatures.empty()) {
-                // Use either selected sensor or first available one
                 size_t sensorIndex = gState.hasSelectedSensor ? 
                     gState.selectedSensorIndex : 0;
                 
-                // Verify index is valid
                 if (sensorIndex < gState.temperatures.size()) {
-                    float temp = gState.temperatures[sensorIndex];
-                    if (temp != DEVICE_DISCONNECTED_C) {
-                        char tempStr[8];
-                        snprintf(tempStr, sizeof(tempStr), "%.1f", temp);
-                        display->showText(tempStr);
-                        xSemaphoreGive(gState.mutex);
-                        vTaskDelay(pdMS_TO_TICKS(1000));
-                        continue;
+                    currentTemp = gState.temperatures[sensorIndex];
+                    if (currentTemp != lastTemp || sensorIndex != lastIndex) {
+                        dataUpdated = true;
+                        lastTemp = currentTemp;
+                        lastIndex = sensorIndex;
                     }
                 }
             }
             xSemaphoreGive(gState.mutex);
-            display->showText("---");
         }
+        
+        // Update display outside mutex lock
+        if (dataUpdated && currentTemp != DEVICE_DISCONNECTED_C) {
+            char tempStr[8];
+            snprintf(tempStr, sizeof(tempStr), "%.1f", currentTemp);
+            display->showText(tempStr);
+        }
+        
         vTaskDelay(pdMS_TO_TICKS(1000));
     }
 }

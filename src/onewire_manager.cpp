@@ -50,27 +50,32 @@ float getTemperature(int index) {
 
 // Task for reading temperature sensors and publishing data
 void TaskReadTemperature(void* parameter) {
+    std::vector<float> tempBuffer;
+    std::vector<std::array<uint8_t, 8>> addrBuffer;
+    
     for(;;) {
-        if(xSemaphoreTake(gState.mutex, pdMS_TO_TICKS(1000)) == pdTRUE) {
-            sensors.requestTemperatures();
-            gState.temperatures.clear();
-            gState.sensorAddresses.clear();
-            
-            // Update temperatures in global state
-            for(size_t i = 0; i < sensorAddresses.size(); i++) {
-                float temp = sensors.getTempC((uint8_t*)sensorAddresses[i].data());
-                if(temp != DEVICE_DISCONNECTED_C) {
-                    gState.temperatures.push_back(temp);
-                    gState.sensorAddresses.push_back(sensorAddresses[i]);
-                }
+        // Read temperatures outside mutex lock
+        sensors.requestTemperatures();
+        tempBuffer.clear();
+        addrBuffer.clear();
+        
+        for(size_t i = 0; i < sensorAddresses.size(); i++) {
+            float temp = sensors.getTempC((uint8_t*)sensorAddresses[i].data());
+            if(temp != DEVICE_DISCONNECTED_C) {
+                tempBuffer.push_back(temp);
+                addrBuffer.push_back(sensorAddresses[i]);
             }
-            
-            // Set data updated flag
-            gState.dataUpdated = true;
-            Serial.println("Global state updated with new sensor data");
-            
-            xSemaphoreGive(gState.mutex);
         }
+        
+        // Quick update of global state
+        if (xSemaphoreTake(gState.mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+            gState.temperatures = tempBuffer;
+            gState.sensorAddresses = addrBuffer;
+            gState.dataUpdated = true;
+            xSemaphoreGive(gState.mutex);
+            Serial.println("Global state updated with new sensor data");
+        }
+        
         vTaskDelay(pdMS_TO_TICKS(READ_INTERVAL_MS));
     }
 }
