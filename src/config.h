@@ -15,8 +15,12 @@
 #define WEBPAGE_HIGHLITED_SENSOR "28104a482819015c"
 #define SYSTEM_RELAY1_TOPIC "relay1"
 #define SYSTEM_RELAY2_TOPIC "relay2"
+
+// Pin configurations
 #define SYSTEM_RELAY1_PIN 32
 #define SYSTEM_RELAY2_PIN 33
+#define DISPLAY_CLK_PIN 16
+#define DISPLAY_DIO_PIN 13
 
 // Increased stack sizes and added some safeguards
 #define MQTT_RECONNECT_STACK_SIZE 6144  // Increased from 4096

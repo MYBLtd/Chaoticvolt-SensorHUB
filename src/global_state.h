@@ -18,7 +18,9 @@ struct GlobalState {
         mqttConnected(false),
         wifiConnected(false),
         lastStatePublish(0),
-        lastSensorPublish(0)
+        lastSensorPublish(0),
+        hasSelectedSensor(false),
+        selectedSensorIndex(0)
     {
         mutex = xSemaphoreCreateMutex();
         if (mutex == NULL) {
@@ -51,6 +53,10 @@ struct GlobalState {
     // Timing
     unsigned long lastStatePublish;
     unsigned long lastSensorPublish;
+
+    // New members for sensor selection
+    bool hasSelectedSensor;
+    size_t selectedSensorIndex;
 };
 
 // Global instance declaration

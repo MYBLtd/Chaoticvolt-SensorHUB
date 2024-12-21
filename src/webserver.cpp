@@ -156,6 +156,29 @@ void TempWebServer::begin() {
         request->send(200, "text/plain", state ? "ON" : "OFF");
     });
 
+    on("/selectSensor", HTTP_POST, [this](AsyncWebServerRequest *request) {
+        if (request->hasParam("address", true)) {
+            String address = request->getParam("address", true)->value();
+            
+            if (xSemaphoreTake(gState.mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+                // Find sensor index by address
+                for (size_t i = 0; i < gState.sensorAddresses.size(); i++) {
+                    if (sensorAddressToString(gState.sensorAddresses[i]) == address) {
+                        gState.selectedSensorIndex = i;
+                        gState.hasSelectedSensor = true;
+                        break;
+                    }
+                }
+                xSemaphoreGive(gState.mutex);
+                request->send(200, "text/plain", "OK");
+            } else {
+                request->send(500, "text/plain", "Mutex error");
+            }
+        } else {
+            request->send(400, "text/plain", "Missing address");
+        }
+    });
+
     // Add relay state monitoring task
     xTaskCreatePinnedToCore(
         [](void* parameter) {
@@ -281,4 +304,3 @@ void TempWebServer::sendRelayStates() {
     serializeJson(doc, jsonString);
     events.send(jsonString.c_str(), "relayStates", millis());
 }
-

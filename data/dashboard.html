@@ -110,6 +110,13 @@
             selectedSensor = address;
             localStorage.setItem('selectedSensor', address);
             
+            // Send selected sensor to backend
+            fetch('/selectSensor', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+                body: `address=${address}`
+            });
+            
             // Update display with current data
             if (tempData.length > 0) {
                 const sensor = tempData.find(s => s.address === address);

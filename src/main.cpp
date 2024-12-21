@@ -9,11 +9,13 @@
 #include <time.h>
 #include "esp_task_wdt.h"
 #include "global_state.h"
+#include "7segDisplay.h"  // Move this after global_state.h
 #include "config.h"
 #include "mqtt_manager.h"
 #include "onewire_manager.h"
 #include "webserver.h"  // Add this line
 #include <SPIFFS.h>  // Add this include
+#include <ESPmDNS.h>  // Add include at top
 
 // SSL/Certificate Handling
 #include <WiFiClientSecure.h>
@@ -30,6 +32,7 @@ WiFiClientSecure espClient;
 PubSubClient mqttClient(espClient);
 WiFiUDP ntpUDP;
 NTPClient timeClient(ntpUDP, NTP_SERVER);
+SegDisplay segDisplay(DISPLAY_CLK_PIN, DISPLAY_DIO_PIN);  // Add global instance
 
 // Task Handles
 TaskHandle_t mqttReconnectTaskHandle = NULL;
@@ -145,7 +148,15 @@ void setupEthernet() {
 }
 
 void setup() {
+    // Initialize serial first for debugging
     Serial.begin(115200);
+    
+    // Initialize display early
+    segDisplay.begin();
+    segDisplay.showText("Init");
+    
+    // Start display task
+    segDisplay.startDisplayTask();
     
     // Initialize Ethernet first
     setupEthernet();
@@ -160,6 +171,22 @@ void setup() {
         return;
     }
     
+    // Initialize mDNS
+    if (MDNS.begin("sensorhub")) {
+        Serial.println("MDNS responder started");
+        
+        // Add service to mDNS
+        MDNS.addService("http", "tcp", 80);
+        MDNS.addService("mqtt", "tcp", MQTT_PORT);
+        
+        // Add TXT records
+        MDNS.addServiceTxt("mqtt", "tcp", "manufacturer", "ChaoticVolt");
+        MDNS.addServiceTxt("mqtt", "tcp", "model", "SensorHUB");
+        MDNS.addServiceTxt("mqtt", "tcp", "version", "1.0");
+    } else {
+        Serial.println("Error setting up MDNS responder");
+    }
+
     // Create web server task
     xTaskCreatePinnedToCore(
         [](void* parameter) {
