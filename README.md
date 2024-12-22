@@ -1,6 +1,7 @@
 # Chaoticvolt-SensorHUB
 
 A robust ESP32-based temperature sensor hub with MQTT connectivity, web interface, and 7-segment display support.
+The web interface allows for real-time temperature monitoring, relay control, and setting sensor firendly names. This also allows for quick diagnostics of the system the sensors are connected to without the need for a mqtt serer or any other external service.
 
 Included are full PCB design files created in easyEDA and exported to Gerber files, Altium Designer Format and pdf for manufacturing.
 The code uses FreeRTOS for task management and is written in C++ using the Espressiv framework in PlatformIO.
