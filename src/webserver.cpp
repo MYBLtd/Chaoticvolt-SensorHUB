@@ -12,7 +12,9 @@
 TempWebServer::TempWebServer(uint16_t port) 
     : AsyncWebServer(port), events("/events"), mqttManager(nullptr) {
     
-    preferences.begin("sensors", false);  // Add this line
+    // Initialize preferences at construction
+    preferences.begin("sensors", true);
+    Serial.println("Preferences initialized in constructor");
 
     networkMutex = xSemaphoreCreateMutex();
     if (networkMutex == NULL) {
@@ -34,9 +36,32 @@ TempWebServer::TempWebServer(uint16_t port)
 }
 
 void TempWebServer::begin() {
-    preferences.begin("sensors", false);
-    loadSensorNames();  // Load saved names first
-    
+    Serial.println("WebServer: Loading stored sensor names...");
+    loadSensorNames();
+
+    if(!SPIFFS.begin(true)) {
+        Serial.println("SPIFFS Mount Failed");
+        return;
+    }
+
+    on("/api/sensor/names", HTTP_GET, [this](AsyncWebServerRequest *request) {
+        DynamicJsonDocument doc(1024);
+        JsonArray array = doc.to<JsonArray>();
+        
+        if (xSemaphoreTake(gState.mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+            for (const auto& sensor : gState.sensorNames) {
+                JsonObject obj = array.createNestedObject();
+                obj["address"] = sensorAddressToString(sensor.address);
+                obj["name"] = sensor.friendlyName;
+            }
+            xSemaphoreGive(gState.mutex);
+        }
+        
+        String response;
+        serializeJson(doc, response);
+        request->send(200, "application/json", response);
+    });
+
     // Mount SPIFFS first
     if(!SPIFFS.begin(true)) {
         Serial.println("SPIFFS Mount Failed");
@@ -221,27 +246,29 @@ void TempWebServer::begin() {
     xTaskCreatePinnedToCore(
         [](void* parameter) {
             TempWebServer* server = (TempWebServer*)parameter;
+            TickType_t lastWakeTime = xTaskGetTickCount();
+            
             for(;;) {
-                if (xSemaphoreTake(gState.mutex, pdMS_TO_TICKS(1000)) == pdTRUE) {
-                    // Create vector of sensor data
+                // Use longer mutex timeout and handle failure gracefully
+                if (xSemaphoreTake(gState.mutex, pdMS_TO_TICKS(500)) == pdTRUE) {
                     std::vector<std::pair<String, float>> sensorData;
+                    sensorData.reserve(gState.sensorAddresses.size()); // Preallocate
                     
-                    // Populate sensor data from global state
+                    // Quick copy under mutex lock
                     for (size_t i = 0; i < gState.sensorAddresses.size(); i++) {
-                        sensorData.push_back(std::make_pair(
-                            String(sensorAddressToString(gState.sensorAddresses[i]).c_str()),
+                        sensorData.emplace_back(
+                            sensorAddressToString(gState.sensorAddresses[i]),
                             gState.temperatures[i]
-                        ));
+                        );
                     }
-                    
-                    // Call sendSensorData with the populated vector
-                    server->sendSensorData(sensorData);
-                    
                     xSemaphoreGive(gState.mutex);
-                } else {
-                    Serial.println("Failed to get mutex for sensor data");
+                    
+                    // Process data outside mutex lock
+                    server->sendSensorData(sensorData);
                 }
-                vTaskDelay(pdMS_TO_TICKS(1000));
+                
+                // Use vTaskDelayUntil for consistent timing
+                vTaskDelayUntil(&lastWakeTime, pdMS_TO_TICKS(1000));
             }
         },
         "WebMonitor",
@@ -255,6 +282,19 @@ void TempWebServer::begin() {
     // Start web server
     AsyncWebServer::begin();
     Serial.println("Web server started");
+
+    // Add event source handler
+    events.onConnect([](AsyncEventSourceClient *client) {
+        Serial.println("Client connected to events");
+    });
+    
+    // Register event source
+    this->addHandler(&events);
+
+    // Add sensor data endpoint
+    on("/api/sensors", HTTP_GET, [this](AsyncWebServerRequest *request) {
+        getSensorData(request);
+    });
 }
 
 void TempWebServer::sendTemperature(float temp) {
@@ -266,40 +306,34 @@ void TempWebServer::sendTemperature(float temp) {
 }
 
 void TempWebServer::sendSensorData(const std::vector<std::pair<String, float>>& sensors) {
-    // Prepare data structure outside mutex lock
     DynamicJsonDocument doc(1024);
     JsonArray array = doc.to<JsonArray>();
-    std::vector<std::pair<String, String>> sensorNameCache;
     
-    // Short mutex lock to copy necessary data
     if (xSemaphoreTake(gState.mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
-        for (const auto& sensorName : gState.sensorNames) {
-            sensorNameCache.push_back(std::make_pair(
-                sensorAddressToString(sensorName.address),
-                String(sensorName.friendlyName)
-            ));
-        }
-        xSemaphoreGive(gState.mutex);
-    }
-    
-    // Process data outside mutex lock
-    for (const auto& sensor : sensors) {
-        JsonObject obj = array.createNestedObject();
-        obj["address"] = sensor.first;
-        obj["temp"] = sensor.second;
+        Serial.println("Preparing sensor data to send...");
         
-        // Look up friendly name from cached data
-        for (const auto& name : sensorNameCache) {
-            if (name.first == sensor.first) {
-                obj["name"] = name.second;
-                break;
+        for (const auto& sensor : sensors) {
+            JsonObject obj = array.createNestedObject();
+            obj["address"] = sensor.first;
+            obj["temperature"] = sensor.second;
+            
+            // Add friendly name if exists
+            for (const auto& name : gState.sensorNames) {
+                if (sensorAddressToString(name.address) == sensor.first) {
+                    obj["name"] = name.friendlyName;
+                    break;
+                }
             }
         }
+        xSemaphoreGive(gState.mutex);
+        
+        String jsonStr;
+        serializeJson(doc, jsonStr);
+        Serial.printf("Sending sensor data: %s\n", jsonStr.c_str());
+        events.send(jsonStr.c_str(), "sensors", millis());
+    } else {
+        Serial.println("Failed to acquire mutex for sending sensor data");
     }
-    
-    String jsonStr;
-    serializeJson(doc, jsonStr);
-    events.send(jsonStr.c_str(), "sensors", millis());
 }
 
 void TempWebServer::setMQTTManager(MQTTManager* manager) {
@@ -335,7 +369,7 @@ void TempWebServer::updateRelayState(uint8_t pin, bool state) {
 }
 
 void TempWebServer::sendRelayStates() {
-    StaticJsonDocument<512> doc;  // Allocate 512 bytes as a compile-time constant
+    StaticJsonDocument<128> doc;
     doc["relay1"] = digitalRead(SYSTEM_RELAY1_PIN) == HIGH;
     doc["relay2"] = digitalRead(SYSTEM_RELAY2_PIN) == HIGH;
     
@@ -345,68 +379,76 @@ void TempWebServer::sendRelayStates() {
 }
 
 void TempWebServer::loadSensorNames() {
+    Serial.println("\n=== Starting Sensor Name Load ===");
+    
+    if (!preferences.begin("sensors", true)) {
+        Serial.println("ERROR: Failed to begin preferences");
+        return;
+    }
+
     if (xSemaphoreTake(gState.mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
         gState.sensorNames.clear();  // Clear existing names
         size_t count = preferences.getUInt("count", 0);
+        Serial.printf("Found %d stored sensor names\n", count);
         
         for (size_t i = 0; i < count; i++) {
-            char key[16];
-            snprintf(key, sizeof(key), "addr_%d", i);
+            char addrKey[16], nameKey[16];
+            snprintf(addrKey, sizeof(addrKey), "addr_%d", i);
+            snprintf(nameKey, sizeof(nameKey), "name_%d", i);
+            
             std::array<uint8_t, 8> address;
-            preferences.getBytes(key, address.data(), 8);
-            
-            snprintf(key, sizeof(key), "name_%d", i);
-            String name = preferences.getString(key, "");
-            
-            if (!name.isEmpty()) {
-                SensorName sensorName;
-                sensorName.address = address;
-                strlcpy(sensorName.friendlyName, name.c_str(), sizeof(sensorName.friendlyName));
-                gState.sensorNames.push_back(sensorName);
+            if (preferences.getBytes(addrKey, address.data(), 8)) {
+                String name = preferences.getString(nameKey, "");
+                if (!name.isEmpty()) {
+                    SensorName sensorName;
+                    sensorName.address = address;
+                    strlcpy(sensorName.friendlyName, name.c_str(), sizeof(sensorName.friendlyName));
+                    gState.sensorNames.push_back(sensorName);
+                    Serial.printf("Loaded sensor %d: %s = %s\n", i, 
+                        sensorAddressToString(address).c_str(), 
+                        name.c_str());
+                }
             }
         }
         xSemaphoreGive(gState.mutex);
+        Serial.printf("Successfully loaded %d sensor names\n", gState.sensorNames.size());
+    } else {
+        Serial.println("ERROR: Failed to acquire mutex in loadSensorNames");
     }
+
+    preferences.end();
+    Serial.println("=== Sensor Name Load Complete ===\n");
 }
 
-void TempWebServer::saveSensorName(const std::array<uint8_t, 8>& address, const char* name) {
-    Serial.println("\n=== Starting Sensor Name Save ===");
-    Serial.printf("Address: %s\n", sensorAddressToString(address).c_str());
-    Serial.printf("Name: %s\n", name);
+bool TempWebServer::saveSensorName(const std::array<uint8_t, 8>& address, const char* name) {
+    Serial.println("\n=== Saving Sensor Name ===");
+    
+    if (!preferences.begin("sensors", false)) {
+        Serial.println("ERROR: Failed to begin preferences");
+        return false;
+    }
 
-    if (xSemaphoreTake(gState.mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
-        Serial.println("Mutex acquired");
-        
-        // Find existing or add new
-        bool found = false;
-        for (auto& sensor : gState.sensorNames) {
-            if (sensor.address == address) {
-                strlcpy(sensor.friendlyName, name, sizeof(sensor.friendlyName));
-                found = true;
-                Serial.println("Updated existing sensor");
-                break;
-            }
-        }
-        
-        if (!found) {
+    bool success = false;
+    if (xSemaphoreTake(gState.mutex, pdMS_TO_TICKS(200)) == pdTRUE) {
+        // First check if this address already exists
+        auto it = std::find_if(gState.sensorNames.begin(), gState.sensorNames.end(),
+            [&address](const SensorName& sn) { return sn.address == address; });
+
+        if (it != gState.sensorNames.end()) {
+            // Update existing name
+            strlcpy(it->friendlyName, name, sizeof(it->friendlyName));
+        } else {
+            // Add new sensor name
             SensorName sensorName;
             sensorName.address = address;
             strlcpy(sensorName.friendlyName, name, sizeof(sensorName.friendlyName));
             gState.sensorNames.push_back(sensorName);
-            Serial.println("Added new sensor");
         }
 
-        // Verify state before saving
-        Serial.printf("Current sensor count: %d\n", gState.sensorNames.size());
-        
-        // Save to preferences
-        preferences.begin("sensors", false);
-        
-        // Clear and save new data
-        preferences.clear();
+        // Save all names to preferences
+        preferences.clear(); // Clear existing preferences
         preferences.putUInt("count", gState.sensorNames.size());
         
-        // Save each sensor
         for (size_t i = 0; i < gState.sensorNames.size(); i++) {
             char addrKey[16], nameKey[16];
             snprintf(addrKey, sizeof(addrKey), "addr_%d", i);
@@ -415,25 +457,20 @@ void TempWebServer::saveSensorName(const std::array<uint8_t, 8>& address, const 
             preferences.putBytes(addrKey, gState.sensorNames[i].address.data(), 8);
             preferences.putString(nameKey, gState.sensorNames[i].friendlyName);
             
-            Serial.printf("Saved %d: %s = %s\n", i, 
+            Serial.printf("Saved sensor %d: %s = %s\n", i, 
                 sensorAddressToString(gState.sensorNames[i].address).c_str(),
                 gState.sensorNames[i].friendlyName);
         }
         
-        preferences.end();
-        Serial.println("Preferences saved");
-        
-        // Verify saved data
-        preferences.begin("sensors", true);
-        size_t count = preferences.getUInt("count", 0);
-        Serial.printf("Verified saved count: %d\n", count);
-        preferences.end();
-        
+        success = true;
         xSemaphoreGive(gState.mutex);
-        Serial.println("=== Sensor Name Save Complete ===\n");
     } else {
-        Serial.println("ERROR: Failed to acquire mutex");
+        Serial.println("ERROR: Failed to acquire mutex in saveSensorName");
     }
+
+    preferences.end();
+    Serial.println("=== Sensor Name Save Complete ===\n");
+    return success;
 }
 
 void TempWebServer::getSensorData(AsyncWebServerRequest *request) {
@@ -463,33 +500,70 @@ void TempWebServer::getSensorData(AsyncWebServerRequest *request) {
 }
 
 void TempWebServer::handleSetSensorName(AsyncWebServerRequest *request) {
-    if (request->hasHeader("Content-Type") && 
-        request->getHeader("Content-Type")->value() == "application/json") {
-        
-        if (request->_tempObject) {
-            String body = * (String *)request->_tempObject;
-            DynamicJsonDocument doc(512);
-            DeserializationError error = deserializeJson(doc, body);
-            
-            if (!error) {
-                const char* addressStr = doc["address"];
-                const char* name = doc["name"];
-                
-                // Convert hex string address to byte array
-                std::array<uint8_t, 8> address;
-                for (int i = 0; i < 8; i++) {
-                    String byteStr = String(addressStr).substring(i*2, i*2+2);
-                    address[i] = strtol(byteStr.c_str(), NULL, 16);
-                }
-                
-                // Save the name
-                saveSensorName(address, name);
-                request->send(200, "text/plain", "OK");
-            } else {
-                request->send(400, "text/plain", "Invalid JSON");
-            }
-        }
+    if (!request->hasHeader("Content-Type") || 
+        request->getHeader("Content-Type")->value() != "application/json") {
+        request->send(400, "text/plain", "Content-Type must be application/json");
+        return;
     }
+    
+    if (!request->_tempObject) {
+        request->send(400, "text/plain", "No body provided");
+        return;
+    }
+
+    String body = *(String*)request->_tempObject;
+    DynamicJsonDocument doc(512);
+    DeserializationError error = deserializeJson(doc, body);
+    
+    if (error) {
+        request->send(400, "text/plain", "Invalid JSON");
+        return;
+    }
+
+    if (!doc.containsKey("address") || !doc.containsKey("name")) {
+        request->send(400, "text/plain", "Missing address or name");
+        return;
+    }
+
+    const char* addressStr = doc["address"];
+    const char* name = doc["name"];
+    
+    std::array<uint8_t, 8> address;
+    for (int i = 0; i < 8; i++) {
+        String byteStr = String(addressStr).substring(i*2, i*2+2);
+        address[i] = strtol(byteStr.c_str(), NULL, 16);
+    }
+    
+    if (saveSensorName(address, name)) {
+        request->send(200, "text/plain", "OK");
+    } else {
+        request->send(500, "text/plain", "Failed to save sensor name");
+    }
+}
+
+void TempWebServer::setupRelayEndpoints() {
+    this->on("/relay1/set", HTTP_POST, [this](AsyncWebServerRequest *request) {
+        if (request->hasParam("state", true)) {
+            String state = request->getParam("state", true)->value();
+            bool relayState = (state == "on" || state == "1");
+            digitalWrite(SYSTEM_RELAY1_PIN, relayState);
+            request->send(200, "text/plain", "OK");
+            sendRelayStates();
+        } else {
+            request->send(400, "text/plain", "Missing state parameter");
+        }
+    });
+    this->on("/relay2/set", HTTP_POST, [this](AsyncWebServerRequest *request) {
+        if (request->hasParam("state", true)) {
+            String state = request->getParam("state", true)->value();
+            bool relayState = (state == "on" || state == "1");
+            digitalWrite(SYSTEM_RELAY2_PIN, relayState);
+            request->send(200, "text/plain", "OK");
+            sendRelayStates();
+        } else {
+            request->send(400, "text/plain", "Missing state parameter");
+        }
+    });
 }
 
 TempWebServer::~TempWebServer() {

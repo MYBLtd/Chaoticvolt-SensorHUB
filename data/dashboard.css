@@ -79,24 +79,21 @@ body {
 }
 
 .relay-button {
-    padding: 8px 15px;
-    margin: 4px;
-    border: 1px solid #ccc;
+    padding: 10px 20px;
+    margin: 5px;
+    border: none;
     border-radius: 4px;
     cursor: pointer;
-    transition: all 0.3s;
 }
 
-.relay-button.active {
+.relay-button[data-state="on"] {
     background-color: #4CAF50;
     color: white;
-    border-color: #45a049;
 }
 
-.relay-button.inactive {
+.relay-button[data-state="off"] {
     background-color: #f0f0f0;
     color: #666;
-    border-color: #ddd;
 }
 
 /* Sensor styles */

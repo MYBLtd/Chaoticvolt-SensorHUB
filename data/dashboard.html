@@ -23,8 +23,8 @@
                     <h2>Relay Controls</h2>
                     <div id="relay1-controls" class="control-group">
                         <h3>Relay 1</h3>
-                        <button class="relay-button" onclick="setRelay(1, true)">ON</button>
-                        <button class="relay-button" onclick="setRelay(1, false)">OFF</button>
+                        <button class="relay-button" data-state="off" onclick="setRelay(1, true)">ON</button>
+                        <button class="relay-button" data-state="off" onclick="setRelay(1, false)">OFF</button>
                     </div>
                     <div id="relay2-controls" class="control-group">
                         <h3>Relay 2</h3>
@@ -79,18 +79,18 @@
         let tempHistory = [];
         const MAX_POINTS = 360;
         let updatesEnabled = true;
+        let sensorNames = new Map();
+        let eventSource = null;
 
-        // Add sensor names cache
-        const sensorNames = new Map();
-
-        // Add function to load names on page load
         async function loadSensorNames() {
             try {
                 const response = await fetch('/api/sensor/names');
                 const names = await response.json();
-                names.forEach(({address, name}) => {
-                    sensorNames.set(address, name);
+                names.forEach(sensor => {
+                    sensorNames.set(sensor.address, sensor.name);
                 });
+                updateAllSensorsList(tempData);
+                updateSensorPicker(tempData);  // Changed from updateSensorPicklist
             } catch (error) {
                 console.error('Error loading sensor names:', error);
             }
@@ -98,43 +98,67 @@
 
         // Initialize when DOM loads
         document.addEventListener('DOMContentLoaded', async () => {
-            console.log('DOM Content Loaded');
             await loadSensorNames();
             setupEventSource();
             initGraph();
             getInitialRelayStates();
         });
 
+        // Add debug logging
         function setupEventSource() {
-            const eventSource = new EventSource('/events');
+            console.log('Setting up EventSource...');
+            if (eventSource) {
+                eventSource.close();
+            }
+            
+            eventSource = new EventSource('/events');
             
             eventSource.onopen = () => {
-                console.log('EventSource connected');
-            };
-            
-            eventSource.onerror = (error) => {
-                console.error('EventSource error:', error);
+                // Request initial sensor data
+                fetch('/api/sensors')
+                    .then(response => response.json())
+                    .then(data => {
+                        handleSensorData({ data: JSON.stringify(data) });
+                    })
+                    .catch(err => console.error('Error fetching initial sensor data:', err));
             };
             
             eventSource.addEventListener('sensors', (e) => {
-                console.log('Received sensor data:', e.data);
                 handleSensorData(e);
             });
+
+            eventSource.addEventListener('relayStates', function(event) {
+                const states = JSON.parse(event.data);
+                updateRelayButtons(1, states.relay1);
+                updateRelayButtons(2, states.relay2);
+            });
+
+            eventSource.onerror = (error) => {
+                console.error('EventSource error:', error);
+                setTimeout(() => setupEventSource(), 5000); // Reconnect after 5s
+            };
         }
 
-        // Update handleSensorData function
+        // Fix handleSensorData function
         function handleSensorData(event) {
+            if (!updatesEnabled) return;
+            
             try {
-                console.log('Processing sensor data:', event.data);
                 const sensors = JSON.parse(event.data);
-                tempData = sensors.map(sensor => ({
-                    ...sensor,
-                    name: sensorNames.get(sensor.address) || sensor.name
-                }));
                 
-                console.log('Processed sensor data:', tempData);
-                updateSensorPicker(tempData);
+                if (!Array.isArray(sensors)) {
+                    console.error('Invalid sensor data format:', sensors);
+                    return;
+                }
+
+                tempData = sensors.map(sensor => ({
+                    address: sensor.address,
+                    temp: parseFloat(sensor.temperature) || 0,
+                    name: sensor.name || sensorNames.get(sensor.address) || ''
+                }));
+                                
                 updateAllSensorsList(tempData);
+                updateSensorPicker(tempData);
                 
                 if (selectedSensor) {
                     const sensor = tempData.find(s => s.address === selectedSensor);
@@ -144,7 +168,8 @@
                     }
                 }
             } catch (err) {
-                console.error('Error in handleSensorData:', err);
+                console.error('Error processing sensor data:', err);
+                console.log('Raw event data:', event.data);
             }
         }
 
@@ -193,33 +218,26 @@
 
         // Update saveSensorName function
         async function saveSensorName(address) {
-            const nameInput = document.getElementById(`name-${address}`);
-            const name = nameInput.value.trim();
-            
+            const input = document.querySelector(`input[data-address="${address}"]`);
+            const name = input.value.trim();
+
             try {
                 const response = await fetch('/api/sensor/name', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ address, name })
+                    body: JSON.stringify({
+                        address: address,
+                        name: name
+                    })
                 });
-                
+
                 if (response.ok) {
-                    // Store locally
                     sensorNames.set(address, name);
-                    localStorage.setItem('sensorNames', JSON.stringify([...sensorNames]));
-                    
-                    // Visual feedback
-                    const btn = nameInput.nextElementSibling;
-                    btn.style.transform = 'scale(1.2)';
-                    setTimeout(() => btn.style.transform = '', 200);
-                    
-                    // Update all instances of this sensor name in the UI
-                    document.querySelectorAll(`input[id="name-${address}"]`).forEach(input => {
-                        input.value = name;
-                    });
+                    updateAllSensorsList(tempData);
+                    updateSensorPicker(tempData);
                 }
-            } catch (error) {
-                console.error('Error saving sensor name:', error);
+            } catch (err) {
+                console.error('Error saving sensor name:', err);
             }
         }
 
@@ -231,38 +249,33 @@
         function setRelay(relay, state) {
             fetch(`/relay${relay}/set`, {
                 method: 'POST',
-                headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-                body: `state=${state ? 'on' : 'off'}`
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                },
+                body: `state=${state ? '1' : '0'}`
             })
             .then(response => {
-                if (response.ok) {
-                    updateRelayButton(relay, state);
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
                 }
+                return response.json();
+            })
+            .then(data => {
+                updateRelayButtons(relay, state);
+            })
+            .catch(error => {
+                console.error('Error:', error);
             });
         }
 
-        function updateRelayButton(relay, state) {
-            // Use more specific selector to target correct relay group
-            const buttons = document.querySelectorAll(
-                `#relay${relay}-controls .relay-button`
-            );
+        function updateRelayButtons(relay, state) {
+            const container = document.getElementById(`relay${relay}-controls`);
+            const buttons = container.getElementsByClassName('relay-button');
             
-            buttons.forEach(btn => {
-                btn.classList.remove('active', 'inactive');
-                if ((state && btn.textContent === 'ON') || 
-                    (!state && btn.textContent === 'OFF')) {
-                    btn.classList.add('active');
-                } else {
-                    btn.classList.add('inactive');
-                }
+            Array.from(buttons).forEach(button => {
+                const isOn = button.textContent === 'ON';
+                button.setAttribute('data-state', (isOn === state) ? 'on' : 'off');
             });
-            
-            // Update state display
-            const stateElement = document.getElementById(`relay${relay}-state`);
-            if (stateElement) {
-                stateElement.textContent = state ? "ON" : "OFF";
-                stateElement.className = `relay-state ${state ? 'on' : 'off'}`;
-            }
         }
 
         function updateRelayStateDisplay(relay, state) {
@@ -349,25 +362,21 @@
                 `).join('');
         }
 
+        // Update updateAllSensorsList function
         function updateAllSensorsList(sensors) {
-            if (!updatesEnabled) return;
+            if (!updatesEnabled || !sensors) return;
             
-            console.log('Updating all sensors list with:', sensors);
             const list = document.getElementById('allSensorsList');
-            if (!list) {
-                console.error('All sensors list element not found');
-                return;
-            }
+            if (!list) return;
             
             list.innerHTML = sensors.map(s => `
                 <div class="sensor-item">
                     <span class="sensor-address">${s.address}</span>
-                    <span class="sensor-value">${s.temp.toFixed(1)}°C</span>
-                    <input type="text" 
-                           class="friendly-name" 
-                           value="${s.name || ''}" 
-                           placeholder="Enter name"
-                           id="name-${s.address}">
+                    <span class="sensor-value">${s.temp?.toFixed(1) || '--'}°C</span>
+                    <input type="text" class="sensor-name" 
+                           data-address="${s.address}" 
+                           value="${s.name || ''}"
+                           placeholder="Enter Name">
                     <button class="save-btn" onclick="saveSensorName('${s.address}')" title="Save name">
                         <svg width="16" height="16" viewBox="0 0 16 16">
                             <path d="M13.5 3l-8 8L2 7.5 3.5 6l2 2 6.5-6z" fill="#28a745"/>
@@ -406,12 +415,17 @@
             }
         }
 
-        // Add to window.onload
-        window.onload = function() {
-            // ...existing code...
-            loadSensorNames();
-            // ...existing code...
-        };
+        // Replace window.onload with proper initialization
+        document.addEventListener('DOMContentLoaded', async () => {
+            try {
+                await loadSensorNames();
+                setupEventSource();  // Changed from initEventSource
+                initGraph();
+                getInitialRelayStates();
+            } catch (error) {
+                console.error('Failed to initialize application:', error);
+            }
+        });
     </script>
 </body>
 </html>

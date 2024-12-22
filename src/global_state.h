@@ -32,9 +32,10 @@ struct GlobalState {
         hasSelectedSensor(false),
         selectedSensorIndex(0)
     {
+        // Early mutex initialization with error checking
         mutex = xSemaphoreCreateMutex();
         if (mutex == NULL) {
-            Serial.println("Failed to create mutex");
+            Serial.println("FATAL: Failed to create mutex");
             ESP.restart();
         }
     }

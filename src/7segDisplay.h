@@ -20,4 +20,3 @@ public:
     void startDisplayTask();
     void showIPAddress(IPAddress ip);
 };
-
